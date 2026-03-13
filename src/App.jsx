@@ -328,15 +328,10 @@ export default function App() {
     try {
       const prompt = buildPrompt(selected, jiraProjects);
       addLog(`Prompt length: ${prompt.length} chars`);
-      const resp = await fetch("https://api.anthropic.com/v1/messages", {
+      const resp = await fetch("http://localhost:3002/api/agent", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "claude-sonnet-4-20250514",
-          max_tokens: 4096,
-          mcp_servers: [{ type: "url", url: "https://mcp.atlassian.com/v1/mcp", name: "atlassian-mcp" }],
-          messages: [{ role: "user", content: prompt }],
-        }),
+        body: JSON.stringify({ prompt, projects: jiraProjects, insights: selected }),
       });
       addLog(`HTTP status: ${resp.status}`);
       const data = await resp.json();
