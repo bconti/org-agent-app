@@ -323,7 +323,7 @@ export default function App() {
     if (!canRun) return;
     resetAll();
     setRunning(true);
-    addLog(`Connecting to: ${atlassianUrl.trim()}`);
+    addLog(`Connecting to: ${BACKEND_URL}`);
     addLog(`Insights: ${selected.join(", ")} | Projects: ${jiraProjects.length ? jiraProjects.join(", ") : "auto"}`);
     try {
       const prompt = buildPrompt(selected, jiraProjects);
