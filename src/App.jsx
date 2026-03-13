@@ -249,7 +249,7 @@ Respond ONLY with valid JSON, no markdown, no backticks:
 
 export default function App() {
   const [selected, setSelected] = useState(INSIGHT_TYPES.map(i => i.id));
-  const [atlassianUrl, setAtlassianUrl] = useState("");
+  const BACKEND_URL = "http://localhost:3002";
   const [jiraProjects, setJiraProjects] = useState([]);
   const [confluenceSpaces, setConfluenceSpaces] = useState([]);
   const [running, setRunning] = useState(false);
@@ -276,9 +276,9 @@ export default function App() {
   };
   const totalSelected = Object.values(selectedActions).reduce((sum, arr) => sum + arr.length, 0);
   const insightMap = Object.fromEntries(INSIGHT_TYPES.map(i => [i.id, i]));
-  const canRun = !running && selected.length > 0 && atlassianUrl.trim();
+  const canRun = !running && selected.length > 0;
 
-  const commitQueue = () => {
+  const commitQueue = async () => {
     const newItems = [];
     Object.entries(selectedActions).forEach(([insightId, idxs]) => {
       const insight = insightMap[insightId];
@@ -290,6 +290,28 @@ export default function App() {
         if (item) newItems.push({ insightId, insightLabel: insight.label, insightIcon: insight.icon, itemIdx: idx, item, fields });
       });
     });
+
+    // Write filled fields back to Jira
+    for (const q of newItems) {
+      if (!q.item.key || !q.fields) continue;
+      const update = {};
+      if (q.fields["due date"]) update.duedate = q.fields["due date"];
+      if (q.fields["assignee"]) update.assignee = { name: q.fields["assignee"] };
+      if (q.fields["parent"]) update.parent = { key: q.fields["parent"] };
+      if (Object.keys(update).length > 0) {
+        try {
+          await fetch(`${BACKEND_URL}/api/jira/issue/${q.item.key}`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ fields: update }),
+          });
+          addLog(`✅ Updated ${q.item.key} in Jira`);
+        } catch (e) {
+          addLog(`⚠️ Failed to update ${q.item.key}: ${e.message}`);
+        }
+      }
+    }
+
     setQueue(prev => {
       const existingKeys = new Set(prev.map(q => q.insightId + "-" + q.itemIdx));
       return [...prev, ...newItems.filter(n => !existingKeys.has(n.insightId + "-" + n.itemIdx))];
@@ -306,19 +328,22 @@ export default function App() {
     try {
       const prompt = buildPrompt(selected, jiraProjects);
       addLog(`Prompt length: ${prompt.length} chars`);
-      const resp = await fetch("http://localhost:3002/api/agent", {
+      const resp = await fetch("https://api.anthropic.com/v1/messages", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          prompt: prompt,
+          model: "claude-sonnet-4-20250514",
+          max_tokens: 4096,
+          mcp_servers: [{ type: "url", url: "https://mcp.atlassian.com/v1/mcp", name: "atlassian-mcp" }],
+          messages: [{ role: "user", content: prompt }],
         }),
       });
       addLog(`HTTP status: ${resp.status}`);
       const data = await resp.json();
-      if (!resp.ok) throw new Error(`API error ${resp.status}: ${data?.error || JSON.stringify(data)}`);
+      if (!resp.ok) throw new Error(`API error ${resp.status}: ${data?.error?.message || JSON.stringify(data)}`);
       addLog(`Blocks: ${data.content?.length} | Stop: ${data.stop_reason}`);
-      const toolCalls = data.content.filter(b => b.type === "tool_use");
-      if (toolCalls.length) addLog(`Tools used: ${toolCalls.map(t => t.name).join(", ")}`);
+      const toolCalls = data.content.filter(b => b.type === "mcp_tool_use");
+      if (toolCalls.length) addLog(`Jira tools used: ${toolCalls.map(t => t.name).join(", ")}`);
       const text = data.content.filter(b => b.type === "text").map(b => b.text).join("\n");
       addLog(`Raw text (first 300 chars): ${text.slice(0, 300)}`);
       let parsed;
@@ -351,18 +376,11 @@ export default function App() {
             <Badge color="blue">Live Mode</Badge>
             <Badge color="green">Preview / Read-Only</Badge>
           </div>
-          <p className="text-sm text-gray-500 mt-1">Connected to Jira via Atlassian MCP. Nothing changes without your approval.</p>
+          <p className="text-sm text-gray-500 mt-1">Connected to Jira via your Atlassian API token. Nothing changes without your approval.</p>
           <div className="flex gap-2 mt-3 flex-wrap">
             <Badge color="blue">Jira (live)</Badge>
             <Badge color="gray">Manual Trigger</Badge>
           </div>
-        </div>
-
-        <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
-          <h2 className="font-semibold text-gray-800 mb-1">🔗 Atlassian Instance URL</h2>
-          <p className="text-xs text-gray-500 mb-3">Your Jira cloud URL so the agent knows which instance to connect to.</p>
-          <input className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-300"
-            placeholder="https://your-company.atlassian.net" value={atlassianUrl} onChange={e => setAtlassianUrl(e.target.value)} />
         </div>
 
         <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-5 space-y-4">
